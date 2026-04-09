@@ -1,0 +1,25 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    configure)
+        # ensure the file exists and its content to ensure we're removing the right file
+        if [ -f "/usr/local/sbin/unminimize" ] &&
+          grep -qi "This system has been minimized by removing packages" "/usr/local/sbin/unminimize"; then
+            rm -f /usr/local/sbin/unminimize
+        fi
+    ;;
+
+    upgrade|abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+
+
+exit 0
