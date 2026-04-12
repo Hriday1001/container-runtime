@@ -10,22 +10,11 @@ import (
 )
 
 func main(){
-	// exe, _ := os.Executable()
-	// args := append([]string{
-    //     "--user",
-    //     "--scope",
-    //     "-p", "Delegate=yes",
-    //     "--unit=container-test",
-    //     exe,
-    // }, append([]string{"run"} , os.Args[2:]...)...)
-
-    // cmd := exec.Command("systemd-run", args...)
-	// // cmd := exec.Command("/proc/self/exe" , append([]string{"child"} , os.Args[2:]...)...)
-	// cmd.Stdin = os.Stdin;
-	// cmd.Stdout = os.Stdout;
-	// cmd.Stderr = os.Stderr;
-	// cmd.Run()
+	printCgroup()
+	
 	switch os.Args[1] {
+	case "daemon" :
+		daemon()
 	case "run":
 		run()
 	case "child":
@@ -35,15 +24,43 @@ func main(){
 	}
 }
 
+func daemon()  {
+	exe, _ := os.Executable()
+
+	unitName := "container-" + fmt.Sprint(os.Getpid())
+
+	args := append([]string{
+		"--user",                 
+		"--scope",
+		"--unit=" + unitName,
+		"--collect",
+		"--quiet",
+		exe,
+	}, append([]string{"run"}, os.Args[2:]...)...)
+
+	cmd := exec.Command("systemd-run", args...)
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		panic(err)
+	}
+}
+
 func run()  {
 	fmt.Printf("Running command %v with id %d\n" , os.Args[2:] , os.Getpid())
 	
+	scopeName := "container-" + fmt.Sprint(os.Getppid()) + ".scope"
+	controlGroups(scopeName)
+
 	cmd := exec.Command("/proc/self/exe" , append([]string{"child"} , os.Args[2:]...)...)
 	cmd.Stdin = os.Stdin;
 	cmd.Stdout = os.Stdout;
 	cmd.Stderr = os.Stderr;
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWUSER | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWUSER | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS ,
 		UidMappings: []syscall.SysProcIDMap{
 			{
 				ContainerID: 0,
@@ -60,6 +77,7 @@ func run()  {
 		},
 		Unshareflags: syscall.CLONE_NEWNS,
 	}
+	printCgroup()
 	err := cmd.Run()
 	if(err != nil){
 		panic(err)
@@ -79,6 +97,7 @@ func child()  {
 	syscall.Chdir("/")
 	syscall.Mount("proc" , "/proc" , "proc" , 0 , "")
 	err := cmd.Run()
+	printCgroup()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			fmt.Printf("Process exited with code %d\n", exitErr.ExitCode())
@@ -88,18 +107,23 @@ func child()  {
 	}
 }
 
-func controlGroups() string{
-	// containerID := "1234"
-	// cgroup_path := fmt.Sprintf("/sys/fs/cgroup/user.slice/user-1000.slice/%v" , containerID);
-	cgroup_path := "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/run-r9a6a1799a09d48ea97e5e17d5c8a1229.scope"
-	// err := os.Mkdir(cgroup_path , 0755)
-	// if err != nil && !os.IsExist(err) {
-	// 	panic(err)
-	// }
-	os.WriteFile(filepath.Join(cgroup_path , "pids.max") , []byte("30") , 0700)
-	err_w := os.WriteFile(filepath.Join(cgroup_path , "cgroup.procs") , []byte(strconv.Itoa(os.Getpid())) , 0700)
+func controlGroups(unitName string){
+	printCgroup()
+	cgroup_path := filepath.Join("/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice" , unitName)
+
+	err_w := os.WriteFile(filepath.Join(cgroup_path , "pids.max") , []byte("20") , 0700)
 	if err_w != nil {
 		panic(err_w)
 	}
-	return cgroup_path
+}
+
+func printCgroup(){
+	pid := os.Getpid()
+	cgroup_file := filepath.Join("/proc" , strconv.Itoa(pid) , "cgroup")
+	data , err := os.ReadFile(cgroup_file)
+	if err != nil {
+        fmt.Printf("Error reading cgroup: %v\n",  err)
+        return
+    }
+	fmt.Printf("PID: %d, Cgroup:\n%s\n", pid, string(data))
 }
