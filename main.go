@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 func main(){
@@ -60,13 +62,18 @@ func run()  {
 	cmd.Stdout = os.Stdout;
 	cmd.Stderr = os.Stderr;
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWUSER | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS ,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWUSER | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET ,
 		UidMappings: []syscall.SysProcIDMap{
 			{
 				ContainerID: 0,
 				HostID: 1000,
 				Size: 1,
 			},
+			// {
+			// 	ContainerID: 42,
+			// 	HostID: 100000,
+			// 	Size: 1,
+			// },
 		},
 		GidMappings: []syscall.SysProcIDMap{
 			{
@@ -74,17 +81,46 @@ func run()  {
 				HostID: 1000,
 				Size: 1,
 			},
+			// {
+			// 	ContainerID: 42,
+			// 	HostID: 100000,
+			// 	Size: 1,
+			// },
 		},
 		Unshareflags: syscall.CLONE_NEWNS,
 	}
 	printCgroup()
-	err := cmd.Run()
+	err := cmd.Start()
 	if(err != nil){
 		panic(err)
+	}
+
+	pid := cmd.Process.Pid
+
+	// err_id_mappings := setUIDGIDMap(pid)
+	// if err_id_mappings != nil {
+	// 	panic(err_id_mappings)
+	// }
+
+	netsetgoPath := "/usr/local/bin/netsetgo"
+	netsetgoCmd := exec.Command(netsetgoPath , "-pid" , strconv.Itoa(pid))
+	err_netsetgo := netsetgoCmd.Run()
+	if err_netsetgo != nil {
+		panic(err_netsetgo)
+	}
+
+	err_wait := cmd.Wait()
+	if err_wait != nil {
+		panic(err_wait)
 	}
 }
 
 func child()  {
+	err_network := waitForNetworkInterfaces()
+	if( err_network != nil){
+		panic(err_network)
+	}
+	getNetInterfaces()
 	defer syscall.Unmount("/proc" , 0)
 	fmt.Printf("Running command %v with id %d\n" , os.Args[2:] , os.Getpid())
 	// controlGroups()
@@ -126,4 +162,70 @@ func printCgroup(){
         return
     }
 	fmt.Printf("PID: %d, Cgroup:\n%s\n", pid, string(data))
+}
+
+func getNetInterfaces(){
+	interfaces , err := net.Interfaces()
+	if err != nil {
+		fmt.Printf("Net interface error %v" , err )
+	}
+	fmt.Printf("Net interfaces = %v" , interfaces)
+}
+
+func waitForNetworkInterfaces() error {
+	timeout := time.Second * 3
+	checkInterval := time.Second
+	start := time.Now()
+
+	for {
+		interfaces , err := net.Interfaces()
+		if(err != nil){
+			panic(err)
+		}
+
+		if(len(interfaces) > 1){
+			return nil
+		}
+
+		if(time.Since(start) > timeout){
+			return fmt.Errorf("Timeout after %s waiting for network", timeout)
+		}
+
+		time.Sleep(checkInterval)
+	}
+}
+
+func setUIDGIDMap(pid int) error {
+	uid := os.Getuid()
+	gid := os.Getegid()
+
+	newuidmapCmd := exec.Command("newuidmap" , strconv.Itoa(pid) , 
+		"0" , strconv.Itoa(uid) , "1" ,
+		"1" , "100000" , "65535" ,
+	)
+
+	newuidmapCmd.Stdin = os.Stdin
+	newuidmapCmd.Stdout = os.Stdout
+	newuidmapCmd.Stderr = os.Stderr
+	
+	err_uid := newuidmapCmd.Run()
+	if err_uid != nil {
+		panic(err_uid)
+	}
+
+	newgidmapCmd := exec.Command("newgidmap" , strconv.Itoa(pid) , 
+		"0" , strconv.Itoa(gid) , "1" ,
+		"1" , "100000" , "65535" ,
+	)
+
+	newgidmapCmd.Stdin = os.Stdin
+	newgidmapCmd.Stdout = os.Stdout
+	newgidmapCmd.Stderr = os.Stderr
+	
+	err_gid := newgidmapCmd.Run()
+	if err_gid != nil {
+		panic(err_gid)
+	}
+
+	return nil
 }
